@@ -1,8 +1,13 @@
+import os
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import math
-from typing import List, Tuple
+from torch.nn import functional as F
+import logging
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
 
 class Conv(nn.Module):
     """
@@ -133,60 +138,24 @@ class SPPF(nn.Module):
         return self.cv2(torch.cat([x, y1, y2, y3], 1))
 
 class DetectHead(nn.Module):
-    """
-    YOLOv8 detection head - converts feature maps to predictions.
-
-    YOLOv8 uses an "anchor-free" approach:
-    - Predicts object center directly (no anchor boxes)
-    - Separate heads for bounding boxes and classification
-    - Uses Distribution Focal Loss for box regression
-    """
-    def __init__(self, num_classes, in_channels=(128, 256, 512)):
+    def __init__(self, num_classes, in_channels=(128, 256, 512), num_boxes=100):
         super().__init__()
         self.num_classes = num_classes
-        self.num_box_coords = 4  # x, y, width, height
-        self.num_outputs = num_classes + self.num_box_coords  # 4 box coordinates + class scores
+        self.num_box_coords = 4
+        self.num_outputs = num_classes + self.num_box_coords
+        self.num_boxes = num_boxes
 
-        # Separate heads for box regression and classification
-        # This design allows each head to specialize in its task
-        self.box_heads = nn.ModuleList([
-            nn.Sequential(
-                Conv(ch, 64, 3),
-                Conv(64, 64, 3),
-                nn.Conv2d(64, self.num_box_coords, 1)  # Output: 4 box coordinates (x,y,w,h)
-            ) for ch in in_channels
-        ])
-
-        self.class_heads = nn.ModuleList([
-            nn.Sequential(
-                Conv(ch, 64, 3),
-                Conv(64, 64, 3),
-                nn.Conv2d(64, num_classes, 1)  # Output: class probabilities
-            ) for ch in in_channels
-        ])
+        ch = sum(in_channels)
+        self.fc = nn.Linear(ch, self.num_outputs * self.num_boxes)
 
     def forward(self, features):
-        """
-        Process features from neck and produce final predictions.
+        # Pool each feature to 1x1 and concat along channel dimension
+        x = torch.cat([F.adaptive_avg_pool2d(f, 1) for f in features], dim=1)
+        x = x.flatten(1)  # shape: [B, ch]
+        x = self.fc(x)
+        x = x.view(x.size(0), self.num_boxes, self.num_outputs)
+        return [x]
 
-        Args:
-            features: List of feature maps from different scales [P3, P4, P5]
-
-        Returns:
-            List of predictions for each scale level
-        """
-        predictions = []
-
-        for i, feat in enumerate(features):
-            # Get box and class predictions separately
-            box_pred = self.box_heads[i](feat)         # Shape: (B, 4, H, W)
-            class_pred = self.class_heads[i](feat)     # Shape: (B, num_classes, H, W)
-
-            # Concatenate along channel dimension
-            pred = torch.cat([box_pred, class_pred], dim=1)  # Shape: (B, 4+num_classes, H, W)
-            predictions.append(pred)
-
-        return predictions
 
 class YOLOv8Nano(nn.Module):
     """
@@ -266,32 +235,32 @@ class YOLOv8Nano(nn.Module):
             SPPF(self.ch5, self.ch5, 5),                # Multi-scale feature aggregation
         ])
 
-    def _build_neck(self):
-        """
-        Build the neck network for feature fusion.
-
-        Uses FPN (Feature Pyramid Network) + PAN (Path Aggregation Network):
-        - FPN: Top-down pathway (large to small features)
-        - PAN: Bottom-up pathway (small to large features)
-
-        This allows the model to combine features from different scales,
-        helping detect objects of various sizes.
-        """
-        return nn.ModuleDict({
-            # FPN - Top-down pathway
-            'upsample1': nn.Upsample(None, 2, 'nearest'),        # 2x upsampling
-            'c2f_up1': C2f(self.ch5 + self.ch4, self.ch4, self.n1),  # Fuse P5+P4
-
-            'upsample2': nn.Upsample(None, 2, 'nearest'),        # 2x upsampling
-            'c2f_up2': C2f(self.ch4 + self.ch3, self.ch3, self.n1),  # Fuse P4+P3
-
-            # PAN - Bottom-up pathway
-            'downsample1': Conv(self.ch3, self.ch3, 3, 2),       # 2x downsampling
-            'c2f_down1': C2f(self.ch3 + self.ch4, self.ch4, self.n1),  # Fuse P3+P4
-
-            'downsample2': Conv(self.ch4, self.ch4, 3, 2),       # 2x downsampling
-            'c2f_down2': C2f(self.ch4 + self.ch5, self.ch5, self.n1),  # Fuse P4+P5
-        })
+    # def _build_neck(self):
+    #     """
+    #     Build the neck network for feature fusion.
+    #
+    #     Uses FPN (Feature Pyramid Network) + PAN (Path Aggregation Network):
+    #     - FPN: Top-down pathway (large to small features)
+    #     - PAN: Bottom-up pathway (small to large features)
+    #
+    #     This allows the model to combine features from different scales,
+    #     helping detect objects of various sizes.
+    #     """
+    #     return nn.ModuleDict({
+    #         # FPN - Top-down pathway
+    #         'upsample1': nn.Upsample(None, 2, 'nearest'),        # 2x upsampling
+    #         'c2f_up1': C2f(self.ch5 + self.ch4, self.ch4, self.n1),  # Fuse P5+P4
+    #
+    #         'upsample2': nn.Upsample(None, 2, 'nearest'),        # 2x upsampling
+    #         'c2f_up2': C2f(self.ch4 + self.ch3, self.ch3, self.n1),  # Fuse P4+P3
+    #
+    #         # PAN - Bottom-up pathway
+    #         'downsample1': Conv(self.ch3, self.ch3, 3, 2),       # 2x downsampling
+    #         'c2f_down1': C2f(self.ch3 + self.ch4, self.ch4, self.n1),  # Fuse P3+P4
+    #
+    #         'downsample2': Conv(self.ch4, self.ch4, 3, 2),       # 2x downsampling
+    #         'c2f_down2': C2f(self.ch4 + self.ch5, self.ch5, self.n1),  # Fuse P4+P5
+    #     })
 
     def forward(self, x):
         """
@@ -312,32 +281,35 @@ class YOLOv8Nano(nn.Module):
             if i in [4, 6, 9]:  # After C2f blocks of stages 2, 3, 4
                 backbone_features.append(x)
 
-        p3, p4, p5 = backbone_features
+        p3, p4, p5 = backbone_features  # that would go to YOLOv8 neck
 
-        # Neck: Feature fusion
-        # FPN - Top-down pathway (combine large-scale features with small-scale)
-        up1 = self.neck['upsample1'](p5)                    # Upsample P5
-        fused1 = torch.cat([up1, p4], dim=1)                # Concatenate with P4
-        n1 = self.neck['c2f_up1'](fused1)                   # Process fused features
+        # Skipped the neck, doing single detect with
+        self.head([p3, p4, p5])
 
-        up2 = self.neck['upsample2'](n1)                    # Upsample fused P4
-        fused2 = torch.cat([up2, p3], dim=1)                # Concatenate with P3
-        n2 = self.neck['c2f_up2'](fused2)                   # Process fused features
-
-        # PAN - Bottom-up pathway (refine features with high-resolution info)
-        down1 = self.neck['downsample1'](n2)                # Downsample refined P3
-        fused3 = torch.cat([down1, n1], dim=1)              # Concatenate with refined P4
-        n3 = self.neck['c2f_down1'](fused3)                 # Process fused features
-
-        down2 = self.neck['downsample2'](n3)                # Downsample refined P4
-        fused4 = torch.cat([down2, p5], dim=1)              # Concatenate with P5
-        n4 = self.neck['c2f_down2'](fused4)                 # Process fused features
+        # # Neck: Feature fusion
+        # # FPN - Top-down pathway (combine large-scale features with small-scale)
+        # up1 = self.neck['upsample1'](p5)                    # Upsample P5
+        # fused1 = torch.cat([up1, p4], dim=1)                # Concatenate with P4
+        # n1 = self.neck['c2f_up1'](fused1)                   # Process fused features
+        #
+        # up2 = self.neck['upsample2'](n1)                    # Upsample fused P4
+        # fused2 = torch.cat([up2, p3], dim=1)                # Concatenate with P3
+        # n2 = self.neck['c2f_up2'](fused2)                   # Process fused features
+        #
+        # # PAN - Bottom-up pathway (refine features with high-resolution info)
+        # down1 = self.neck['downsample1'](n2)                # Downsample refined P3
+        # fused3 = torch.cat([down1, n1], dim=1)              # Concatenate with refined P4
+        # n3 = self.neck['c2f_down1'](fused3)                 # Process fused features
+        #
+        # down2 = self.neck['downsample2'](n3)                # Downsample refined P4
+        # fused4 = torch.cat([down2, p5], dim=1)              # Concatenate with P5
+        # n4 = self.neck['c2f_down2'](fused4)                 # Process fused features
 
         # Head: Generate final predictions
         # n2 = P3 level (80x80, small objects)
         # n3 = P4 level (40x40, medium objects)
         # n4 = P5 level (20x20, large objects)
-        return self.head([n2, n3, n4])
+        # return self.head([n2, n3, n4])
 
     def _initialize_weights(self):
         """
@@ -356,18 +328,6 @@ class YOLOv8Nano(nn.Module):
                 # Standard BN initialization
                 nn.init.constant_(module.weight, 1)
                 nn.init.constant_(module.bias, 0)
-
-def create_yolov8_nano(num_classes=80):
-    """
-    Factory function to create YOLOv8 Nano model.
-
-    Args:
-        num_classes: Number of object classes to detect
-
-    Returns:
-        YOLOv8Nano model instance
-    """
-    return YOLOv8Nano(num_classes=num_classes)
 
 # Placeholder loss function (replace with YOLOv8-style loss for production)
 class YoloSimpleLoss(nn.Module):
@@ -406,7 +366,7 @@ if __name__ == "__main__":
 
     # Create model for CAPTCHA character detection (36 classes: 0-9, A-Z)
     num_classes = 36
-    model = create_yolov8_nano(num_classes=num_classes)
+    model = YOLOv8Nano(num_classes=num_classes)
     model = model.to(device)
 
     print(f"Created YOLOv8 Nano model with {num_classes} classes")
@@ -428,8 +388,10 @@ if __name__ == "__main__":
         for i, pred in enumerate(predictions):
             print(f"Scale {i+1} prediction shape: {pred.shape}")
 
-    import torch.optim as optim
+    import os
+    os.exit(1)
 
+    import torch.optim as optim
 
     # Training loop
     def train_yolov8_nano(model, dataloader, num_epochs=10, lr=1e-3, device='cpu'):
@@ -454,6 +416,14 @@ if __name__ == "__main__":
 
             avg_loss = total_loss / len(dataloader)
             print(f"Epoch {epoch+1}/{num_epochs} - Loss: {avg_loss:.4f}")
+
+
+    from torch.utils.data import Dataset, DataLoader
+
+    class Chaptcha100kDataset(Dataset):
+        def __init__(self, annot_folder, img_folder):
+            pass
+    train_loader = Chaptcha100kDataset(annot_folder="path/to/annotations.json")
 
     train_yolov8_nano(model, train_loader, num_epochs=2, lr=1e-3, device=device)
 

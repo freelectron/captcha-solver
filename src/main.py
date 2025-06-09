@@ -74,7 +74,6 @@ def load_annotation(path: str, index: int = None) -> dict:
         return ann
 
 if __name__=="__main__":
-
     # Load an example image
     sample_idx = 0
     img_path = os.path.join(IMG_FOLDER, f"{sample_idx}.png")
