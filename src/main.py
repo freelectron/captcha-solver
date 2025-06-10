@@ -91,17 +91,17 @@ if __name__=="__main__":
     img_folder_train = "../data/captcha100k/train/img/"
     ann_folder_train = "../data/captcha100k/train/ann/"
     dataset_train = Captcha100kDataset(img_folder_train, ann_folder_train)
-    train_dataloader = Captcha100kDatasetLoader(dataset_train, batch_size=4)
+    train_dataloader = Captcha100kDatasetLoader(dataset_train, batch_size=4, shuffle=True)
 
     img_folder_validation = "../data/captcha100k/validation/img/"
     ann_folder_validation = "../data/captcha100k/validation/ann/"
     dataset_validation = Captcha100kDataset(img_folder_train, ann_folder_train)
-    validation_dataloader = Captcha100kDatasetLoader(dataset_validation, batch_size=4)
+    validation_dataloader = Captcha100kDatasetLoader(dataset_validation, batch_size=4, shuffle=True)
 
     img_folder_test = "../data/captcha100k/test/img/"
     ann_folder_test = "../data/captcha100k/test/ann/"
     dataset_test = Captcha100kDataset(img_folder_train, ann_folder_train)
-    test_dataloader = Captcha100kDatasetLoader(dataset_test, batch_size=4)
+    test_dataloader = Captcha100kDatasetLoader(dataset_test, batch_size=4, shuffle=True)
 
     model = CRNN(img_h=60, img_w=160, in_dimensions_rnn=265, hidden_dimensions_rnn=128, num_classes=Captcha100kDataset.num_classes())
     device = "mps"
@@ -132,4 +132,5 @@ if __name__=="__main__":
             train_loss += loss.item()
 
         avg_train_loss = train_loss / len(train_dataloader)
+        print("After epoch: {} | loss: {:.4f} | train loss: {:.4f}".format(epoch + 1, train_loss, avg_train_loss))
         logger.info("After epoch: {} | loss: {:.4f} | train loss: {:.4f}".format(epoch + 1, train_loss, avg_train_loss))
