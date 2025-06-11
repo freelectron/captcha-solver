@@ -70,7 +70,9 @@ class Captcha100kDataset(Dataset):
             if len(ann_char_labels) > 5
             else self.pad_to_length(labels, 6, pad_value=self.num_classes() - 1)
         )
-        img = torch.Tensor(img_arr)
+        # Part of pre-processing: normalise image
+        img = torch.Tensor(img_arr) / 255.0
+        # Convert to float tensor and permute to (C, H, W) format
         img = img.permute(2, 0, 1)
 
         return img, labels_padded

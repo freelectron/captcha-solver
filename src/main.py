@@ -4,7 +4,6 @@ import logging
 import os
 
 import cv2
-from IPython.core.completerlib import module_list
 from tqdm import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
@@ -89,9 +88,10 @@ def load_annotation(path: str, index: int = None) -> dict:
 
 def calc_accuracy(preds: torch.Tensor, labels: torch.Tensor) -> float:
     preds_classes = preds.argmax(dim=2, keepdim=True)
-    correct = preds_classes.eq(labels).int()
+    # compare the first six sequences since this is where the labels should be
+    correct = preds_classes.view(preds_classes.size(0),-1)[:, :6].eq(labels).int()
 
-    return (correct / (labels.size(0) * labels.size(1) * labels.size(2))).detach()
+    return (correct / (labels.size(0) * labels.size(1))).detach()
 
 if __name__ == "__main__":
     # IMG_FOLDER = "../data/captcha100k/sample/img/"
@@ -144,7 +144,7 @@ if __name__ == "__main__":
     )
     model.to(device=device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
     # last class is the blank label for CTC loss, so we use num_classes()-1
     criterion = nn.CTCLoss(blank=Captcha100kDataset.num_classes() - 1)
 
@@ -237,7 +237,12 @@ if __name__ == "__main__":
                 )
 
                 epoch_validation_losses.append(loss.item())
-                epoch_validation_accuracies.append(calc_accuracy( preds_log_probs.view(1,0,2), labels))
+                epoch_validation_accuracies.append(
+                    calc_accuracy(
+                        preds_log_probs.view(preds_log_probs.size(1),preds_log_probs.size(0),preds_log_probs.size(2)),
+                        labels
+                    )
+                )
 
             epoch_total_validation_loss = sum(epoch_validation_losses)
             epoch_avg_validation_loss = epoch_total_validation_loss / len(
