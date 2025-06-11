@@ -87,7 +87,11 @@ def load_annotation(path: str, index: int = None) -> dict:
         ann["index"] = index if index else path.split("/")[-1].split(".")[0]
         return ann
 
+def calc_accuracy(preds: torch.Tensor, labels: torch.Tensor) -> float:
+    preds_classes = preds.argmax(dim=2, keepdim=True)
+    correct = preds_classes.eq(labels).int()
 
+    return (correct / (labels.size(0) * labels.size(1) * labels.size(2))).detach()
 
 if __name__ == "__main__":
     # IMG_FOLDER = "../data/captcha100k/sample/img/"
@@ -206,6 +210,7 @@ if __name__ == "__main__":
 
         with torch.no_grad():
             epoch_validation_losses = list()
+            epoch_validation_accuracies = list()
             for images, labels in tqdm(
                 validation_dataloader, desc="Validation", leave=False
             ):
@@ -232,6 +237,7 @@ if __name__ == "__main__":
                 )
 
                 epoch_validation_losses.append(loss.item())
+                epoch_validation_accuracies.append(calc_accuracy( preds_log_probs.view(1,0,2), labels))
 
             epoch_total_validation_loss = sum(epoch_validation_losses)
             epoch_avg_validation_loss = epoch_total_validation_loss / len(
@@ -240,6 +246,7 @@ if __name__ == "__main__":
             epoch_median_validation_loss = sorted(epoch_validation_losses)[
                 len(epoch_validation_losses) // 2
             ]
+            epoch_avg_validation_accuracy = sum(epoch_validation_accuracies) / len(epoch_validation_accuracies)
             logger.info(
                 "Validation after epoch: {} | loss: {:.4f} | avg loss: {:.4f} | med loss: {:.4f}".format(
                     epoch + 1,
@@ -250,8 +257,9 @@ if __name__ == "__main__":
             )
             avg_validation_loses.append(epoch_avg_validation_loss)
             median_validation_loses.append(epoch_median_validation_loss)
+            avg_validation_accuracies.append(epoch_avg_validation_accuracy)
 
-        if epoch % 1 == 0:
+        if epoch % 10 == 0:
             model.save_status(
                 "../data/",
                 MODEL_PARAMS,
