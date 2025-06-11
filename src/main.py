@@ -121,6 +121,13 @@ def calc_accuracy(preds: torch.Tensor, labels: torch.Tensor) -> float:
     preds_clases = ctc_greedy_decoder(preds)
     return (sum(sum(preds_clases.eq(labels).int())).cpu().detach() / (labels.size(0) * labels.size(1))).cpu().detach()
 
+def load_model_weights(model: CRNN, state_dict_path: str):
+    if os.path.exists(state_dict_path):
+        logger.info(f"Loading model weights from {state_dict_path}.")
+        model.load_state_dict(torch.load(state_dict_path))
+    else:
+        raise FileNotFoundError(f"Model weights file {state_dict_path} does not exist.")
+
 if __name__ == "__main__":
     # IMG_FOLDER = "../data/captcha100k/sample/img/"
     # ANN_FOLDER = "../data/captcha100k/sample/ann/"
@@ -137,26 +144,31 @@ if __name__ == "__main__":
         "batch_size": BATCH_SIZE,
         "model_CRNN": CNN_BASIC,
     }
+    START_LEARNING_RATE = 0.0001
+    NUM_EPOCHS = 200
 
     img_folder_train = "../data/captcha100k/train/img/"
     ann_folder_train = "../data/captcha100k/train/ann/"
     dataset_train = Captcha100kDataset(img_folder_train, ann_folder_train)
     train_dataloader = Captcha100kDatasetLoader(
-        dataset_train, batch_size=BATCH_SIZE, shuffle=True
+        dataset_train, batch_size=BATCH_SIZE, shuffle=True,
+        collate_fn=Captcha100kDataset.collate_fn
     )
 
     img_folder_validation = "../data/captcha100k/validation/img/"
     ann_folder_validation = "../data/captcha100k/validation/ann/"
     dataset_validation = Captcha100kDataset(img_folder_train, ann_folder_train)
     validation_dataloader = Captcha100kDatasetLoader(
-        dataset_validation, batch_size=BATCH_SIZE, shuffle=False
+        dataset_validation, batch_size=BATCH_SIZE, shuffle=False,
+        collate_fn=Captcha100kDataset.collate_fn
     )
 
     img_folder_test = "../data/captcha100k/test/img/"
     ann_folder_test = "../data/captcha100k/test/ann/"
     dataset_test = Captcha100kDataset(img_folder_train, ann_folder_train)
     test_dataloader = Captcha100kDatasetLoader(
-        dataset_test, batch_size=BATCH_SIZE, shuffle=False
+        dataset_test, batch_size=BATCH_SIZE, shuffle=False,
+        collate_fn=Captcha100kDataset.collate_fn
     )
 
     model = CRNN(
@@ -166,13 +178,19 @@ if __name__ == "__main__":
         hidden_dimensions_rnn=128,
         num_classes=Captcha100kDataset.num_classes(),
     )
+    # load_model_weights(
+    #     model,
+    #     "../data/models/44abb492072ad870af24d9ad25ea11b640038a07/2025-06-11T13:25:57.522199/crnn_model.pth"
+    # )
+
     device = "mps"
-    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = (
-        "1"  # Enable MPS fallback for compatibility: a few things are not implemented in MPS yet
-    )
+    # Enable MPS fallback for compatibility: a few things are not implemented in MPS yet
+    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
     model.to(device=device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
+    lr = START_LEARNING_RATE
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    schedular = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=1, end_factor=0.01, total_iters=NUM_EPOCHS)
     # last class is the blank label for CTC loss, so we use num_classes()-1
     criterion = nn.CTCLoss(blank=Captcha100kDataset.num_classes() - 1)
 
@@ -184,10 +202,10 @@ if __name__ == "__main__":
     median_validation_loses = list()
     avg_validation_accuracies = list()
 
-    for epoch in range(200):
+    for epoch in range(NUM_EPOCHS):
         logger.info(f"Started training epoch {epoch+1}.")
         epoch_train_losses = list()
-        for images, labels in tqdm(
+        for images, labels, labels_lengths in tqdm(
             train_dataloader, desc=f"Training epoch {epoch+1}", leave=False
         ):
             images = images.to(device=device)
@@ -205,9 +223,9 @@ if __name__ == "__main__":
                 fill_value=preds_log_probs.size(0),
                 dtype=torch.int32,
             )
-            labels_lengths = torch.full(
-                size=(labels.size(0),), fill_value=labels.size(1), dtype=torch.int32
-            )
+            # labels_lengths = torch.full(
+            #     size=(labels.size(0),), fill_value=labels.size(1), dtype=torch.int32
+            # )
             loss = criterion(
                 preds_log_probs.cpu(),
                 labels.cpu(),

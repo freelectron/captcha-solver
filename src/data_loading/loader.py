@@ -65,18 +65,25 @@ class Captcha100kDataset(Dataset):
         )
         labels = torch.Tensor(ann_char_labels).long()
         # -1 because the first class id is 0, and we want to pad with the last class id
-        labels_padded = (
-            labels
-            if len(ann_char_labels) > 5
-            else self.pad_to_length(labels, 6, pad_value=self.num_classes() - 1)
-        )
+        # labels_padded = (
+        #     labels
+        #     if len(ann_char_labels) > 5
+        #     else self.pad_to_length(labels, 6, pad_value=self.num_classes() - 1)
+        # )
         # Part of pre-processing: normalise image
         img = torch.Tensor(img_arr) / 255.0
         # Convert to float tensor and permute to (C, H, W) format
         img = img.permute(2, 0, 1)
 
-        return img, labels_padded
+        return img, labels, torch.tensor(len(labels))
 
+    @classmethod
+    def collate_fn(cls, batch):
+        images, labels, label_lengths = zip(*batch)
+        images = torch.stack(images, 0)
+        labels = torch.nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=cls.num_classes() - 1)
+        label_lengths = torch.stack(label_lengths, 0)
+        return images, labels, label_lengths
 
 class Captcha100kDatasetLoader(DataLoader):
     def __init__(self, *args, **kwargs):
@@ -84,13 +91,13 @@ class Captcha100kDatasetLoader(DataLoader):
 
 
 if __name__ == "__main__":
-    img_folder = "../../data/captcha100k/sample/img"
-    ann_folder = "../../data/captcha100k/sample/ann"
+    img_folder = "../../data/captcha100k/train/img"
+    ann_folder = "../../data/captcha100k/train/ann"
     dataset = Captcha100kDataset(img_folder, ann_folder)
 
     print(f"Dataset size: {len(dataset)}")
-    img, labels = dataset[0]
-    print(f"Sample image shape: {img.shape}, Labels: {labels}")
+    img, labels, lengths = dataset[0]
+    print(f"Sample image shape: {img.shape}, Labels: {labels} {labels.shape}, Lengths: {lengths.shape}")
 
     # from src.main import load_annotation, load_image, TrainImage
     # sample_idx = 32
@@ -101,7 +108,12 @@ if __name__ == "__main__":
     # img = TrainImage(image=image_example, annotations=ann_example)
     # img.show_with_bounding_boxes()
 
-    sample_load = Captcha100kDatasetLoader(dataset, batch_size=4, shuffle=True)
-    for img, labels in sample_load:
-        print(f"Batch image shape: {img.shape}, Labels: {labels.shape}")
-        break
+    sample_load = Captcha100kDatasetLoader(dataset, batch_size=4, shuffle=True, collate_fn=Captcha100kDataset.collate_fn)
+    for img, labels, lengths in sample_load:
+        print()
+        print(lengths)
+        print()
+        print(f"Batch image shape: {img.shape}, Labels: {labels.shape}, Lengths: {lengths}")
+        # if sum(lengths > 5) > 0 :
+        #     print(f"FOUND: {img.shape}, Labels: {labels}, Lengths: {lengths}")
+        #     break

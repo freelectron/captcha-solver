@@ -11,35 +11,67 @@ CNN_BASIC = [
         "params": {
             "in_channels": 3,
             "out_channels": 32,
-            "kernel_size": 5,
+            "kernel_size": 4,
             "stride": 1,
-            "padding": 1,
+            "padding": 0,
         },
     },
     {"layer": "ReLU", "params": {}},
+    {
+        "layer": "MaxPool2d",
+        "params": {
+            "kernel_size": 2,
+            "stride": 1,
+            "padding": 0,
+        }
+    },
     {
         "layer": "Conv2d",
         "params": {
             "in_channels": 32,
             "out_channels": 64,
-            "kernel_size": 4,
+            "kernel_size": 3,
             "stride": 1,
-            "padding": 1,
+            "padding": 0,
         },
     },
     {"layer": "ReLU", "params": {}},
-    # {"layer": "AdaptiveAvgPool2d", "params": {"output_size": 2}},
     {
         "layer": "Conv2d",
         "params": {
             "in_channels": 64,
-            "out_channels": 32,
+            "out_channels": 128,
+            "kernel_size": 3,
+            "stride": 2,
+            "padding": 0,
+        },
+    },
+    {
+        "layer": "BatchNorm2d",
+        "params": {
+            "num_features": 128
+        }
+    },
+    {"layer": "ReLU", "params": {}},
+    {
+        "layer": "Conv2d",
+        "params": {
+            "in_channels": 128,
+            "out_channels": 256,
             "kernel_size": 3,
             "stride": 1,
-            "padding": 1,
+            "padding": 0,
         },
     },
     {"layer": "ReLU", "params": {}},
+    {
+        "layer": "MaxPool2d",
+        "params": {
+            "kernel_size": 2,
+            "stride": 2,
+            "padding": 0,
+        }
+    },
 ]
 
 
@@ -52,8 +84,8 @@ def parse_crrn_config(config):
             layers.append(nn.Conv2d(**params))
         elif layer_type == "ReLU":
             layers.append(nn.ReLU())
-        elif layer_type == "AdaptiveAvgPool2d":
-            layers.append(nn.AdaptiveAvgPool2d(**params))
+        elif layer_type == "MaxPool2d":
+            layers.append(nn.MaxPool2d(**params))
         elif layer_type == "Flatten":
             layers.append(nn.Flatten())
         elif layer_type == "Linear":
@@ -89,6 +121,8 @@ def calc_dimensions_final(in_dim, model_config: list):
         elif l_name == "AdaptiveAvgPool2d":
             output_size = layer["params"]["output_size"]
             in_dim = output_size
+        elif l_name == "BatchNorm2d":
+            in_dim = in_dim
         else:
             raise ValueError("Unsupported layer type in CNN config: {}".format(l_name))
 
@@ -110,27 +144,32 @@ class CRNN(nn.Module):
         self,
         img_h,
         img_w,
+        max_seq_len=6,
         in_dimensions_rnn=265,
         hidden_dimensions_rnn=128,
         num_classes=36,
     ):
         super().__init__()
         self.img_w_final = calc_dimensions_final(img_w, CNN_BASIC)
-        img_h_final = calc_dimensions_final(img_h, CNN_BASIC)
-        out_channels_cnn = get_final_out_channels(CNN_BASIC)
+        self.img_h_final = calc_dimensions_final(img_h, CNN_BASIC)
+        self.out_channels_cnn = get_final_out_channels(CNN_BASIC)
+        self.max_seq_len = max_seq_len
+        self.num_classes = num_classes
+        self.hidden_dimensions_rnn = hidden_dimensions_rnn
 
         self.cnn = parse_crrn_config(CNN_BASIC)
         self.flattening_layers = nn.ModuleList(
-            [nn.Linear(out_channels_cnn * img_h_final, in_dimensions_rnn), nn.SiLU()]
+            [nn.Linear(self.out_channels_cnn * self.img_h_final, in_dimensions_rnn), nn.SiLU()]
         )
-        self.rnn = nn.LSTM(in_dimensions_rnn, hidden_dimensions_rnn, bidirectional=True)
-        # hidden_dimensions_rnn * 2 because of bidirectional RNN ;  num_classes + 1 for the blank label in CTC loss
+        self.rnn = nn.LSTM(in_dimensions_rnn, self.hidden_dimensions_rnn, bidirectional=True)
+        # hidden_dimensions_rnn * 2 because of bidirectional RNN
         self.fc_out = nn.Linear(
-            hidden_dimensions_rnn * 2, num_classes + 1
-        )  # todo: check what that 1 is
+            self.hidden_dimensions_rnn * 2, self.num_classes
+        )
 
     def forward(self, x):
         x = self.cnn(x)
+        # Bring the width dimension to the front for RNN processing
         x = x.permute(0, 3, 1, 2)
         x = x.view(x.size(0), x.size(1), -1)
         for m in self.flattening_layers:
