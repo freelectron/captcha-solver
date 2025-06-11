@@ -158,14 +158,14 @@ class CRNN(nn.Module):
 if __name__ == "__main__":
     # Example usage
     model = CRNN(
-        img_h=50,
-        img_w=200,
+        img_h=60,
+        img_w=160,
         in_dimensions_rnn=256,
         hidden_dimensions_rnn=128,
-        num_classes=36,
+        num_classes=64,
     )
 
     # Dummy input tensor with shape (batch_size, channels, height, width)
-    dummy_input = torch.randn(8, 1, 50, 200)  # Batch size of 8
+    dummy_input = torch.randn(64, 3, 60, 160)  # Batch size of 8
     output = model(dummy_input)
-    assert model.img_w_final == output.shape[0]
+    assert model.img_w_final == output.shape[0], f"Expected output width {model.img_w_final}, got {output.shape[0]}"

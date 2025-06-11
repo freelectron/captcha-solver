@@ -86,12 +86,40 @@ def load_annotation(path: str, index: int = None) -> dict:
         ann["index"] = index if index else path.split("/")[-1].split(".")[0]
         return ann
 
-def calc_accuracy(preds: torch.Tensor, labels: torch.Tensor) -> float:
-    preds_classes = preds.argmax(dim=2, keepdim=True)
-    # compare the first six sequences since this is where the labels should be
-    correct = preds_classes.view(preds_classes.size(0),-1)[:, :6].eq(labels).int()
+def ctc_greedy_decoder(preds, blank_class=64):
+    pred_indices = torch.argmax(preds, dim=2)
+    # pred_indices = pred_indices.transpose(0, 1)
+    # preds_indices = pred_indices.view(pred_indices.size(0), -1).cpu().numpy().tolist()
+    pred_strings = []
+    for pred in pred_indices:
+        collapsed = []
+        prev = None
+        for p in pred:
+            if p != prev and p != blank_class:  # skip blanks
+                collapsed.append(p.item())
+            prev = p
+        pred_strings.append(collapsed)
 
-    return (correct / (labels.size(0) * labels.size(1))).detach()
+    # Make sequences to length 6
+    result = list()
+    for pred in pred_indices:
+        if len(pred) < 6:
+            right_padding = 6 - len(pred)
+            pred = torch.nn.functional.pad(torch.Tensor(pred_strings), (0,right_padding))
+        else:
+            pred = pred[:6]
+        result.append(pred)
+
+    return torch.stack(result)
+
+
+def calc_accuracy(preds: torch.Tensor, labels: torch.Tensor) -> float:
+    # Method 1: compare the first six sequences since this is where the labels should be
+    # preds_classes = preds.argmax(dim=2, keepdim=True)
+    # correct = preds_classes.view(preds_classes.size(0),-1)[:, :6].eq(labels).int()
+    # Method 2: use CTC greedy decoder
+    preds_clases = ctc_greedy_decoder(preds)
+    return (sum(sum(preds_clases.eq(labels).int())).cpu().detach() / (labels.size(0) * labels.size(1))).cpu().detach()
 
 if __name__ == "__main__":
     # IMG_FOLDER = "../data/captcha100k/sample/img/"
@@ -238,10 +266,11 @@ if __name__ == "__main__":
 
                 epoch_validation_losses.append(loss.item())
                 epoch_validation_accuracies.append(
-                    calc_accuracy(
-                        preds_log_probs.view(preds_log_probs.size(1),preds_log_probs.size(0),preds_log_probs.size(2)),
-                        labels
-                    )
+                    0
+                    # float(calc_accuracy(
+                    #     preds_log_probs.view(preds_log_probs.size(1),preds_log_probs.size(0),preds_log_probs.size(2)),
+                    #     labels
+                    # ))
                 )
 
             epoch_total_validation_loss = sum(epoch_validation_losses)
@@ -253,11 +282,12 @@ if __name__ == "__main__":
             ]
             epoch_avg_validation_accuracy = sum(epoch_validation_accuracies) / len(epoch_validation_accuracies)
             logger.info(
-                "Validation after epoch: {} | loss: {:.4f} | avg loss: {:.4f} | med loss: {:.4f}".format(
+                "Validation after epoch: {} | loss: {:.4f} | avg loss: {:.4f} | med loss: {:.4f} | Acc {:.4f}".format(
                     epoch + 1,
                     epoch_total_validation_loss,
                     epoch_avg_validation_loss,
                     epoch_median_validation_loss,
+                    epoch_avg_validation_accuracy,
                 )
             )
             avg_validation_loses.append(epoch_avg_validation_loss)
