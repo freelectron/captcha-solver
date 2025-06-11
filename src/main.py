@@ -257,7 +257,7 @@ if __name__ == "__main__":
         with torch.no_grad():
             epoch_validation_losses = list()
             epoch_validation_accuracies = list()
-            for images, labels in tqdm(
+            for images, labels, _ in tqdm(
                 validation_dataloader, desc="Validation", leave=False
             ):
                 images = images.to(device=device)
@@ -312,7 +312,7 @@ if __name__ == "__main__":
             median_validation_loses.append(epoch_median_validation_loss)
             avg_validation_accuracies.append(epoch_avg_validation_accuracy)
 
-        if epoch % 10 == 0:
+        if epoch != 0 and epoch % 10 == 0:
             model.save_status(
                 "../data/",
                 MODEL_PARAMS,
