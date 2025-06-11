@@ -4,17 +4,22 @@ import logging
 import os
 
 import cv2
+from IPython.core.completerlib import module_list
 from tqdm import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
 import torch.optim
 from torch import nn
 
-from src.model.crnn import CRNN
+from src.model.crnn import CRNN, CNN_BASIC
 from src.data_loading.loader import Captcha100kDatasetLoader, Captcha100kDataset
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+fomatter = logging.Formatter("%(asctime)s - %(filename)s - %(levelname)s | %(message)s")
+handler = logging.StreamHandler()
+handler.setFormatter(fomatter)
+logger.addHandler(handler)
 
 
 @dataclass
@@ -27,25 +32,27 @@ class TrainImage:
         self.bounding_boxes_labels = self.get_bounding_boxes_labels()
 
     def get_bounding_boxes_labels(self) -> list:
-        obj_characters = self.annotations.get('objects', [])
+        obj_characters = self.annotations.get("objects", [])
         boxes = []
         if len(obj_characters) > 0:
             for obj_ch in obj_characters:
-                label = obj_ch.get('classTitle', None)
+                label = obj_ch.get("classTitle", None)
                 if label is None:
                     logger.warning("Image object without label found in annotations.")
                 if obj_ch["geometryType"] == self.bbox_geometry_type:
-                    points = obj_ch.get('points', [])
-                    if exterior := points.get('exterior'):
+                    points = obj_ch.get("points", [])
+                    if exterior := points.get("exterior"):
                         x1, y1 = exterior[0]
                         x2, y2 = exterior[1]
-                        boxes.append({
-                            'x1': int(x1),
-                            'y1': int(y1),
-                            'x2': int(x2),
-                            'y2': int(y2),
-                            'label':label
-                        })
+                        boxes.append(
+                            {
+                                "x1": int(x1),
+                                "y1": int(y1),
+                                "x2": int(x2),
+                                "y2": int(y2),
+                                "label": label,
+                            }
+                        )
         return boxes
 
     def show(self):
@@ -57,27 +64,32 @@ class TrainImage:
         fig, ax = plt.subplots(1, 1, figsize=(10, 10))
         ax.imshow(self.image)
         for box in self.bounding_boxes_labels:
-            rect = plt.Rectangle((box['x1'], box['y1']),
-                                 box['x2'] - box['x1'],
-                                 box['y2'] - box['y1'],
-                                 linewidth=2,
-                                 edgecolor='r',
-                                 facecolor='none')
+            rect = plt.Rectangle(
+                (box["x1"], box["y1"]),
+                box["x2"] - box["x1"],
+                box["y2"] - box["y1"],
+                linewidth=2,
+                edgecolor="r",
+                facecolor="none",
+            )
             ax.add_patch(rect)
-            ax.text(box['x1'], box['y1'], box['label'], color='green', fontsize=20)
+            ax.text(box["x1"], box["y1"], box["label"], color="green", fontsize=20)
         plt.show()
+
 
 def load_image(path: str) -> np.ndarray:
     return cv2.imread(path)
 
+
 def load_annotation(path: str, index: int = None) -> dict:
-    with open(path, 'r') as file:
+    with open(path, "r") as file:
         ann = json.load(file)
         ann["index"] = index if index else path.split("/")[-1].split(".")[0]
         return ann
 
 
-if __name__=="__main__":
+
+if __name__ == "__main__":
     # IMG_FOLDER = "../data/captcha100k/sample/img/"
     # ANN_FOLDER = "../data/captcha100k/sample/ann/"
     # sample_idx = 0
@@ -88,49 +100,160 @@ if __name__=="__main__":
     # img = TrainImage(image=image_example, annotations=ann_example)
     # img.show_with_bounding_boxes()
 
+    BATCH_SIZE = 64
+    MODEL_PARAMS = {
+        "batch_size": BATCH_SIZE,
+        "model_CRNN": CNN_BASIC,
+    }
+
     img_folder_train = "../data/captcha100k/train/img/"
     ann_folder_train = "../data/captcha100k/train/ann/"
     dataset_train = Captcha100kDataset(img_folder_train, ann_folder_train)
-    train_dataloader = Captcha100kDatasetLoader(dataset_train, batch_size=4, shuffle=True)
+    train_dataloader = Captcha100kDatasetLoader(
+        dataset_train, batch_size=BATCH_SIZE, shuffle=True
+    )
 
     img_folder_validation = "../data/captcha100k/validation/img/"
     ann_folder_validation = "../data/captcha100k/validation/ann/"
     dataset_validation = Captcha100kDataset(img_folder_train, ann_folder_train)
-    validation_dataloader = Captcha100kDatasetLoader(dataset_validation, batch_size=4, shuffle=True)
+    validation_dataloader = Captcha100kDatasetLoader(
+        dataset_validation, batch_size=BATCH_SIZE, shuffle=False
+    )
 
     img_folder_test = "../data/captcha100k/test/img/"
     ann_folder_test = "../data/captcha100k/test/ann/"
     dataset_test = Captcha100kDataset(img_folder_train, ann_folder_train)
-    test_dataloader = Captcha100kDatasetLoader(dataset_test, batch_size=4, shuffle=True)
+    test_dataloader = Captcha100kDatasetLoader(
+        dataset_test, batch_size=BATCH_SIZE, shuffle=False
+    )
 
-    model = CRNN(img_h=60, img_w=160, in_dimensions_rnn=265, hidden_dimensions_rnn=128, num_classes=Captcha100kDataset.num_classes())
+    model = CRNN(
+        img_h=60,
+        img_w=160,
+        in_dimensions_rnn=265,
+        hidden_dimensions_rnn=128,
+        num_classes=Captcha100kDataset.num_classes(),
+    )
     device = "mps"
-    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1" # Enable MPS fallback for compatibility: a few things are not implemented in MPS yet
+    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = (
+        "1"  # Enable MPS fallback for compatibility: a few things are not implemented in MPS yet
+    )
     model.to(device=device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     # last class is the blank label for CTC loss, so we use num_classes()-1
-    criterion = nn.CTCLoss(blank=Captcha100kDataset.num_classes()-1)
+    criterion = nn.CTCLoss(blank=Captcha100kDataset.num_classes() - 1)
 
-    for epoch in range(10):
-        train_loss = 0
-        for images, labels in tqdm(train_dataloader, desc=f"Epoch {epoch+1}", leave=False):
+    avg_train_loses = list()
+    median_train_loses = list()
+    avg_train_accuracies = list()
+
+    avg_validation_loses = list()
+    median_validation_loses = list()
+    avg_validation_accuracies = list()
+
+    for epoch in range(200):
+        logger.info(f"Started training epoch {epoch+1}.")
+        epoch_train_losses = list()
+        for images, labels in tqdm(
+            train_dataloader, desc=f"Training epoch {epoch+1}", leave=False
+        ):
             images = images.to(device=device)
             labels = labels.to(device=device)
 
             optimizer.zero_grad()
+            model.train()
             preds = model(images)
-            preds = preds.permute(1, 0, 2)  # Change shape to (seq_len, batch_size, num_classes) for CTC loss
+            preds = preds.permute(
+                1, 0, 2
+            )  # Change shape to (seq_len, batch_size, num_classes) for CTC loss
             preds_log_probs = nn.functional.log_softmax(preds, dim=2)
-
-            pred_lengths = torch.full(size=(preds.size(1), ), fill_value=preds_log_probs.size(0), dtype=torch.int32)
-            labels_lengths = torch.full(size=(labels.size(0), ), fill_value=labels.size(1), dtype=torch.int32)
-            loss = criterion(preds_log_probs.cpu(), labels.cpu(), pred_lengths.cpu(), labels_lengths.cpu())
+            pred_lengths = torch.full(
+                size=(preds.size(1),),
+                fill_value=preds_log_probs.size(0),
+                dtype=torch.int32,
+            )
+            labels_lengths = torch.full(
+                size=(labels.size(0),), fill_value=labels.size(1), dtype=torch.int32
+            )
+            loss = criterion(
+                preds_log_probs.cpu(),
+                labels.cpu(),
+                pred_lengths.cpu(),
+                labels_lengths.cpu(),
+            )
             loss.backward()
             optimizer.step()
 
-            train_loss += loss.item()
+            # Double check but by default: loss = the mean loss over the batch
+            epoch_train_losses.append(loss.item())
 
-        avg_train_loss = train_loss / len(train_dataloader)
-        print("After epoch: {} | loss: {:.4f} | train loss: {:.4f}".format(epoch + 1, train_loss, avg_train_loss))
-        logger.info("After epoch: {} | loss: {:.4f} | train loss: {:.4f}".format(epoch + 1, train_loss, avg_train_loss))
+        epoch_total_train_loss = sum(epoch_train_losses)
+        epoch_avg_train_loss = epoch_total_train_loss / len(train_dataloader)
+        epoch_median_train_loss = sorted(epoch_train_losses)[
+            len(epoch_train_losses) // 2
+        ]
+        logger.info(
+            "After epoch: {} | loss: {:.4f} | avg loss: {:.4f} | med loss: {:.4f}".format(
+                epoch + 1,
+                epoch_total_train_loss,
+                epoch_avg_train_loss,
+                epoch_median_train_loss,
+            )
+        )
+        avg_train_loses.append(epoch_avg_train_loss)
+        median_train_loses.append(epoch_median_train_loss)
+
+        with torch.no_grad():
+            epoch_validation_losses = list()
+            for images, labels in tqdm(
+                validation_dataloader, desc="Validation", leave=False
+            ):
+                images = images.to(device=device)
+                labels = labels.to(device=device)
+
+                model.eval()
+                preds = model(images)
+                preds = preds.permute(1, 0, 2)
+                preds_log_probs = nn.functional.log_softmax(preds, dim=2)
+                pred_lengths = torch.full(
+                    size=(preds.size(1),),
+                    fill_value=preds_log_probs.size(0),
+                    dtype=torch.int32,
+                )
+                labels_lengths = torch.full(
+                    size=(labels.size(0),), fill_value=labels.size(1), dtype=torch.int32
+                )
+                loss = criterion(
+                    preds_log_probs.cpu(),
+                    labels.cpu(),
+                    pred_lengths.cpu(),
+                    labels_lengths.cpu(),
+                )
+
+                epoch_validation_losses.append(loss.item())
+
+            epoch_total_validation_loss = sum(epoch_validation_losses)
+            epoch_avg_validation_loss = epoch_total_validation_loss / len(
+                validation_dataloader
+            )
+            epoch_median_validation_loss = sorted(epoch_validation_losses)[
+                len(epoch_validation_losses) // 2
+            ]
+            logger.info(
+                "Validation after epoch: {} | loss: {:.4f} | avg loss: {:.4f} | med loss: {:.4f}".format(
+                    epoch + 1,
+                    epoch_total_validation_loss,
+                    epoch_avg_validation_loss,
+                    epoch_median_validation_loss,
+                )
+            )
+            avg_validation_loses.append(epoch_avg_validation_loss)
+            median_validation_loses.append(epoch_median_validation_loss)
+
+        if epoch % 1 == 0:
+            model.save_status(
+                "../data/",
+                MODEL_PARAMS,
+            )
+            logger.info(f"Model saved after epoch {epoch+1}.")

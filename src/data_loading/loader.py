@@ -9,17 +9,15 @@ from torch.utils.data import Dataset, DataLoader
 
 
 class Captcha100kDataset(Dataset):
-    allowed_chars = string.ascii_letters + string.digits + "?" # added ? as an empty character (used for padding)
+    allowed_chars = (
+        string.ascii_letters + string.digits + "?"
+    )  # added ? as an empty character (used for padding)
 
     def __init__(self, img_folder: str, ann_folder: str):
         self.img_folder = img_folder
         self.ann_folder = ann_folder
-        self.ann_files = [
-            f for f in os.listdir(ann_folder) if f.endswith('.json')
-        ]
-        self.img_files = [
-            f for f in os.listdir(img_folder) if f.endswith('.png')
-        ]
+        self.ann_files = [f for f in os.listdir(ann_folder) if f.endswith(".json")]
+        self.img_files = [f for f in os.listdir(img_folder) if f.endswith(".png")]
 
     @classmethod
     def _char_to_label(cls, char: str) -> int:
@@ -32,14 +30,14 @@ class Captcha100kDataset(Dataset):
     def num_classes(cls):
         return len(cls.allowed_chars)
 
-    def _load_annotation(self, filepath: str)-> list:
-        with open(filepath, 'r') as file:
+    def _load_annotation(self, filepath: str) -> list:
+        with open(filepath, "r") as file:
             ann_raw = json.load(file)
 
         char_labels = list()
-        obj_characters = ann_raw.get('objects', [])
+        obj_characters = ann_raw.get("objects", [])
         for obj_ch in obj_characters:
-            label = obj_ch.get('classTitle', None)
+            label = obj_ch.get("classTitle", None)
             if label is None:
                 raise ValueError("Image object without label found in annotations.")
             else:
@@ -58,28 +56,35 @@ class Captcha100kDataset(Dataset):
 
     def __getitem__(self, idx: int):
         ann_filename = self.ann_files[idx]
-        img_filepath = os.path.join(self.img_folder, ".".join(ann_filename.split(".")[:-1]))
+        img_filepath = os.path.join(
+            self.img_folder, ".".join(ann_filename.split(".")[:-1])
+        )
         img_arr = cv2.imread(img_filepath)
-        ann_char_labels = self._load_annotation(os.path.join(self.ann_folder, ann_filename))
+        ann_char_labels = self._load_annotation(
+            os.path.join(self.ann_folder, ann_filename)
+        )
         labels = torch.Tensor(ann_char_labels).long()
         # -1 because the first class id is 0, and we want to pad with the last class id
-        labels_padded = labels if len(ann_char_labels) > 5 else self.pad_to_length(labels, 6, pad_value=self.num_classes()-1)
+        labels_padded = (
+            labels
+            if len(ann_char_labels) > 5
+            else self.pad_to_length(labels, 6, pad_value=self.num_classes() - 1)
+        )
         img = torch.Tensor(img_arr)
         img = img.permute(2, 0, 1)
 
         return img, labels_padded
+
 
 class Captcha100kDatasetLoader(DataLoader):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
 
-
-if __name__=="__main__":
+if __name__ == "__main__":
     img_folder = "../../data/captcha100k/sample/img"
     ann_folder = "../../data/captcha100k/sample/ann"
     dataset = Captcha100kDataset(img_folder, ann_folder)
-
 
     print(f"Dataset size: {len(dataset)}")
     img, labels = dataset[0]

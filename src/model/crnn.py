@@ -1,19 +1,47 @@
+import datetime
+import json
+import os.path
+
 import torch
 import torch.nn as nn
 
 CNN_BASIC = [
-    {"layer": "Conv2d", "params": {"in_channels": 3, "out_channels": 32, "kernel_size": 5, "stride": 1, "padding": 1}},
+    {
+        "layer": "Conv2d",
+        "params": {
+            "in_channels": 3,
+            "out_channels": 32,
+            "kernel_size": 5,
+            "stride": 1,
+            "padding": 1,
+        },
+    },
     {"layer": "ReLU", "params": {}},
-    {"layer": "Conv2d", "params": {"in_channels": 32, "out_channels": 64, "kernel_size": 4, "stride": 1, "padding": 1}},
+    {
+        "layer": "Conv2d",
+        "params": {
+            "in_channels": 32,
+            "out_channels": 64,
+            "kernel_size": 4,
+            "stride": 1,
+            "padding": 1,
+        },
+    },
     {"layer": "ReLU", "params": {}},
     # {"layer": "AdaptiveAvgPool2d", "params": {"output_size": 2}},
-    {"layer": "Conv2d", "params": {"in_channels": 64, "out_channels": 32, "kernel_size": 3, "stride": 1, "padding": 1}},
+    {
+        "layer": "Conv2d",
+        "params": {
+            "in_channels": 64,
+            "out_channels": 32,
+            "kernel_size": 3,
+            "stride": 1,
+            "padding": 1,
+        },
+    },
     {"layer": "ReLU", "params": {}},
 ]
 
-RNN_PART = [
-    {"layer": "LSTM", "params": {"input_size": 256, "hidden_size": 128}},
-]
 
 def parse_crrn_config(config):
     layers = []
@@ -43,7 +71,10 @@ def parse_crrn_config(config):
 
 
 def calc_dimensions(input_size, kernel_size, stride, padding, dilation=1):
-    return int((input_size + 2*padding - dilation * (kernel_size - 1) - 1)/stride + 1)
+    return int(
+        (input_size + 2 * padding - dilation * (kernel_size - 1) - 1) / stride + 1
+    )
+
 
 def calc_dimensions_final(in_dim, model_config: list):
     for layer in model_config:
@@ -63,6 +94,7 @@ def calc_dimensions_final(in_dim, model_config: list):
 
     return in_dim
 
+
 def get_final_out_channels(model_config: list):
     out_channels = 0
     for layer in model_config:
@@ -74,7 +106,14 @@ def get_final_out_channels(model_config: list):
 
 
 class CRNN(nn.Module):
-    def __init__(self, img_h, img_w, in_dimensions_rnn=265, hidden_dimensions_rnn=128, num_classes=36):
+    def __init__(
+        self,
+        img_h,
+        img_w,
+        in_dimensions_rnn=265,
+        hidden_dimensions_rnn=128,
+        num_classes=36,
+    ):
         super().__init__()
         self.img_w_final = calc_dimensions_final(img_w, CNN_BASIC)
         img_h_final = calc_dimensions_final(img_h, CNN_BASIC)
@@ -82,14 +121,13 @@ class CRNN(nn.Module):
 
         self.cnn = parse_crrn_config(CNN_BASIC)
         self.flattening_layers = nn.ModuleList(
-            [
-                nn.Linear(out_channels_cnn * img_h_final, in_dimensions_rnn),
-                nn.SiLU()
-            ]
+            [nn.Linear(out_channels_cnn * img_h_final, in_dimensions_rnn), nn.SiLU()]
         )
         self.rnn = nn.LSTM(in_dimensions_rnn, hidden_dimensions_rnn, bidirectional=True)
         # hidden_dimensions_rnn * 2 because of bidirectional RNN ;  num_classes + 1 for the blank label in CTC loss
-        self.fc_out = nn.Linear(hidden_dimensions_rnn * 2, num_classes + 1) # todo: check what that 1 is
+        self.fc_out = nn.Linear(
+            hidden_dimensions_rnn * 2, num_classes + 1
+        )  # todo: check what that 1 is
 
     def forward(self, x):
         x = self.cnn(x)
@@ -98,16 +136,36 @@ class CRNN(nn.Module):
         for m in self.flattening_layers:
             x = m(x)
         # TODO: add Dropout here
-        x, (_,_) = self.rnn(x)
+        x, (_, _) = self.rnn(x)
         x = self.fc_out(x)
 
         return x
 
+    def save_status(self, data_dir, params: dict):
+        datetime_stamp = datetime.datetime.now().isoformat()
+        folderpath = os.path.join(data_dir, "models", datetime_stamp)
+        os.makedirs(folderpath, exist_ok=True)
+
+        state_dict_filepath = os.path.join(folderpath, "crnn_model.pth")
+        torch.save(self.state_dict(), state_dict_filepath)
+
+        params_filepath = os.path.join(folderpath, "params.json")
+        with open(params_filepath, "w") as f:
+            if params is not None:
+                json.dump(params, f)
+
+
 if __name__ == "__main__":
     # Example usage
-    model = CRNN(img_h=50, img_w=200, in_dimensions_rnn=256, hidden_dimensions_rnn=128, num_classes=36)
+    model = CRNN(
+        img_h=50,
+        img_w=200,
+        in_dimensions_rnn=256,
+        hidden_dimensions_rnn=128,
+        num_classes=36,
+    )
 
     # Dummy input tensor with shape (batch_size, channels, height, width)
     dummy_input = torch.randn(8, 1, 50, 200)  # Batch size of 8
     output = model(dummy_input)
-    assert  model.img_w_final == output.shape[0]
+    assert model.img_w_final == output.shape[0]
